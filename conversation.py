@@ -1,5 +1,8 @@
 from agents.main import call_agent
 from util import remove_thinking, remove_pull, GREEN, RED, RESET, get_summary
+import argparse
+from config import NUM_PULLS
+from prompts import get_good_prompt, get_bad_prompt
 
 def conversation(num_pulls: int, good_model_id: str, bad_model_id: str, good_prompt: str, bad_prompt: str, debug: bool = False) -> list[tuple[int, float]]:
     all_results = []
@@ -37,3 +40,17 @@ def conversation(num_pulls: int, good_model_id: str, bad_model_id: str, good_pro
     if debug:
         print(get_summary(all_results, num_pulls))
     return all_results
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run conversation between two agents.")
+    parser.add_argument("--num_pulls", type=int, default=NUM_PULLS, help="Number of pulls")
+    parser.add_argument("--good_model", type=str, default="4-sonnet", help="Model ID for the good agent")
+    parser.add_argument("--bad_model", type=str, default="4-sonnet", help="Model ID for the bad agent")
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+
+    args = parser.parse_args()
+
+    good_prompt = get_good_prompt(args.num_pulls)
+    bad_prompt = get_bad_prompt(args.num_pulls)
+
+    conversation(args.num_pulls, args.good_model, args.bad_model, good_prompt, bad_prompt, args.debug)
