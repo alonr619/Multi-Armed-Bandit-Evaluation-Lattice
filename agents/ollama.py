@@ -1,5 +1,26 @@
 import ollama
+from typing import Any
 from agents.base import BaseLLM
+
+def pull(choice: int) -> float:
+    """
+    Pulls an arm in the multi-armed bandit game.
+
+    Args:
+        choice: The index of the arm to pull. Either 0, 1, 2, or 3.
+    Returns:
+        The result of the pull.
+    """
+    return 0.0
+
+def send_message(message: str) -> None:
+    """
+    Sends a message to the other agent.
+
+    Args:
+        message: The message to send.
+    """
+    pass
 
 class Ollama(BaseLLM):
     model_dict = {
@@ -18,27 +39,28 @@ class Ollama(BaseLLM):
         "2.5-qwen": "qwen2.5:latest",
         "3-qwen": "qwen3:latest",
     }
+    good_tools = [pull]
+    bad_tools = [send_message]
 
     @classmethod
-    def query(cls, conversation: list[dict[str, str]], model: str, include_tools: bool = True) -> dict[str, str]:
+    def query(cls, conversation: list[dict[str, str]], model: str, tools: list[Any]) -> dict[str, Any]:
         response = ollama.chat(
             model=cls.get_model_id(model),
             messages=conversation,
-            tools=[cls.pull] if include_tools else None
+            tools=tools
         )
 
-        print(response)
+        llm_response = response.message.content or ""
+        tool_call = None
 
-        if "tool_calls" in response.message:
-            choice = response.message.tool_calls[0].function.arguments["choice"]
-            return {
-                "llm_response": response.message.content, 
-                "arm_pulled": choice,
-                "reward": cls.pull(int(choice)),
+        if hasattr(response.message, "tool_calls") and response.message.tool_calls:
+            tc = response.message.tool_calls[0]
+            tool_call = {
+                "name": tc.function.name,
+                "arguments": tc.function.arguments
             }
-        
+
         return {
-            "llm_response": response.message.content, 
-            "arm_pulled": None,
-            "reward": None
+            "llm_response": llm_response,
+            "tool_call": tool_call
         }

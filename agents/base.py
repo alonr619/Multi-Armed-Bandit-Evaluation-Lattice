@@ -1,10 +1,10 @@
 from typing import Any
-from bandit import n_armed_bandit
 
 class BaseLLM:
     model_dict: dict[str, str] = {}
     client: Any = None
-    tools: Any = []
+    good_tools: list[Any] = []
+    bad_tools: list[Any] = []
 
     @classmethod
     def get_model_dict(cls) -> dict[str, str]:
@@ -15,8 +15,8 @@ class BaseLLM:
         return cls.client
     
     @classmethod
-    def get_tools(cls) -> Any:
-        return cls.tools
+    def get_tools(cls, good: bool) -> list[Any]:
+        return cls.good_tools if good else cls.bad_tools
 
     @classmethod
     def get_model_id(cls, model: str) -> str:
@@ -27,26 +27,19 @@ class BaseLLM:
         return model in cls.model_dict
     
     @classmethod
-    def pull(cls, choice: int) -> float:
+    def query(cls, conversation: list[dict[str, str]], model: str, tools: list[dict[str, Any]]) -> dict[str, Any]:
         """
-        Pulls an arm in the multi-armed bandit game.
+        Query the LLM with a conversation and tools.
 
         Args:
-            choice: The index of the arm to pull. Either 0, 1, 2, or 3.
-        
+            conversation: List of message dicts with 'role' and 'content' keys.
+            model: Model identifier string.
+            tools: List of tool definitions.
+
         Returns:
-            The reward for the pulled arm.
+            {
+                "llm_response": <response text>,
+                "tool_call": {"name": <tool_name>, "arguments": {...}} or None
+            }
         """
-        return n_armed_bandit(choice)
-    
-    @classmethod
-    def query(cls, conversation: list[dict[str, str]], model: str, include_tools: bool = True) -> dict[str, Any]:
-        """
-        Format of output should be:
-        {
-            "llm_response": <response>,
-            "arm_pulled": <arm_pulled>,
-            "reward": <reward>
-        }
-        """
-        pass
+        raise NotImplementedError

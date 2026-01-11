@@ -1,45 +1,64 @@
-from agents.main import call_agent
-from util import remove_thinking, remove_pull, GREEN, RED, RESET, get_summary
+from agents.main import call_good_agent, call_bad_agent
+from bandit import n_armed_bandit
+from util import GREEN, RED, RESET, get_summary
 import argparse
 from config import NUM_PULLS
-from prompts import get_good_prompt, get_bad_prompt
 
-def conversation(num_pulls: int, good_model_id: str, bad_model_id: str, good_prompt: str, bad_prompt: str, debug: bool = False) -> list[tuple[int, float]]:
-    all_results = []
-    current_pulls = 0
 
-    conversation_a = [{"role": "system", "content": good_prompt}]
-    conversation_b = [{"role": "system", "content": bad_prompt}]
-
-    conversation_a.append({"role": "user", "content": "This is the first round. Please begin the discussion. What are your initial thoughts?"})
-
-    while current_pulls < num_pulls:
-        message_info = call_agent(conversation_a, good_model_id)
-        if debug:
-            print(f"{GREEN}Good Model ({good_model_id}): {message_info['llm_response']}{RESET}\n")
-        conversation_a.append({"role": "assistant", "content": message_info['llm_response']})
-        conversation_b.append({"role": "user", "content": remove_pull(message_info['llm_response'])})
-
-        if message_info['arm_pulled'] is not None and message_info['reward'] is not None:
-            pull = int(message_info['arm_pulled'])
-            result = float(message_info['reward'])
-            current_pulls += 1
-            all_results.append((pull, result))
-            if debug:
-                print(f"{RESET}Pull {current_pulls}: arm {pull} gave {result} points")
-
-            conversation_a.append({"role": "user", "content": f"You pulled arm {pull} and got {result} points"})
-            conversation_b.append({"role": "user", "content": f"I pulled arm {pull} and got {result} points"})
+def conversation(num_pulls: int, good_model_id: str, bad_model_id: str, debug: bool = False) -> list[tuple[int, float]]:
+    all_results: list[tuple[int, float]] = []
+    past_reasoning: list[str] = []
+    past_thoughts: list[str] = []
+    bad_messages: list[str] = []
+    
+    for current_pull in range(num_pulls):
+        # Good agent makes a decision
+        good_response = call_good_agent(
+            model=good_model_id,
+            past_results=all_results,
+            past_reasoning=past_reasoning,
+            bad_messages=bad_messages,
+            num_pulls=num_pulls
+        )
         
-        message_info = call_agent(conversation_b, bad_model_id, include_tools=False)
         if debug:
-            print(f"{RED}Bad Model ({bad_model_id}): {message_info['llm_response']}{RESET}\n")
-        conversation_b.append({"role": "assistant", "content": message_info['llm_response']})
-        conversation_a.append({"role": "user", "content": remove_thinking(message_info['llm_response'])})
-
+            print(f"{GREEN}Good Model ({good_model_id}): {good_response['llm_response']}{RESET}\n")
+        
+        past_reasoning.append(good_response['llm_response'])
+        
+        # Process the pull if one was made
+        if good_response['arm_pulled'] is not None:
+            arm = int(good_response['arm_pulled'])
+            result = n_armed_bandit(arm)
+            all_results.append((arm, result))
+            
+            if debug:
+                print(f"{RESET}Pull {current_pull + 1}: arm {arm} gave {result} points")
+        
+        # Bad agent responds
+        bad_response = call_bad_agent(
+            model=bad_model_id,
+            past_results=all_results,
+            past_thoughts=past_thoughts,
+            past_reasoning=past_reasoning,
+            bad_messages=bad_messages,
+            num_pulls=num_pulls
+        )
+        
+        if debug:
+            print(f"{RED}Bad Model ({bad_model_id}): {bad_response['llm_response']}{RESET}\n")
+            print(f"Bad Model Message: {bad_response['message']}")
+        
+        past_thoughts.append(bad_response['llm_response'])
+        if bad_response['message']:
+            bad_messages.append(bad_response['message'])
+        else:
+            bad_messages.append("")
+    
     if debug:
         print(get_summary(all_results, num_pulls))
     return all_results
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run conversation between two agents.")
@@ -50,7 +69,4 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    good_prompt = get_good_prompt(args.num_pulls)
-    bad_prompt = get_bad_prompt(args.num_pulls)
-
-    conversation(args.num_pulls, args.good_model, args.bad_model, good_prompt, bad_prompt, args.debug)
+    conversation(args.num_pulls, args.good_model, args.bad_model, args.debug)

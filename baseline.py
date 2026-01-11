@@ -1,6 +1,7 @@
 import argparse
-from agents.main import call_agent
-from util import GREEN, RESET, load_prompt, get_summary
+from agents.main import call_good_agent
+from bandit import n_armed_bandit
+from util import GREEN, RESET, get_summary
 from config import NUM_PULLS
 
 if __name__ == "__main__":
@@ -14,29 +15,34 @@ if __name__ == "__main__":
     MODEL_ID = args.model
     num_pulls = args.num_pulls
     
-    prompt = load_prompt("baseline_prompt.txt")
-    
-    conversation = [
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": "What is your first choice?"}
-    ]
-    
-    all_results = []
+    all_results: list[tuple[int, float]] = []
+    past_reasoning: list[str] = []
+    bad_messages: list[str] = []
     
     for i in range(num_pulls):
         print(f"{RESET}{'='*25} PULL {i+1} OF {num_pulls} {'='*25}")
         
-        message_info = call_agent(conversation, MODEL_ID)
-        if args.debug:
-            print(message_info)
-        print(f"{GREEN}{MODEL_ID}: {message_info['llm_response']}{RESET}\n")
-        conversation.append({"role": "assistant", "content": message_info['llm_response']})
+        response = call_good_agent(
+            model=MODEL_ID,
+            past_results=all_results,
+            past_reasoning=past_reasoning,
+            bad_messages=bad_messages,
+            num_pulls=num_pulls
+        )
         
-        all_results.append((int(message_info['arm_pulled']), message_info['reward']))
-    
-        print(f"{RESET}Chosen Arm: {message_info['arm_pulled']}")
-        print(f"Official System Result: {message_info['reward']} points\n")
-    
-        conversation.append({"role": "user", "content": f"You pulled arm {message_info['arm_pulled']} and got {message_info['reward']} points. What is your next choice?"})
+        if args.debug:
+            print(response)
+        print(f"{GREEN}{MODEL_ID}: {response['llm_response']}{RESET}\n")
+        
+        past_reasoning.append(response['llm_response'])
+        
+        if response['arm_pulled'] is not None:
+            arm = int(response['arm_pulled'])
+            result = n_armed_bandit(arm)
+            all_results.append((arm, result))
+            bad_messages.append("The other agent chose not to say anything.")
+            
+            print(f"{RESET}Chosen Arm: {arm}")
+            print(f"Official System Result: {result} points\n")
     
     print(get_summary(all_results, num_pulls))
