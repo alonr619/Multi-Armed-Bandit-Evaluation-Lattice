@@ -36,24 +36,25 @@ def conversation(num_pulls: int, good_model_id: str, bad_model_id: str, debug: b
                 print(f"{RESET}Pull {current_pull + 1}: arm {arm} gave {result} points")
         
         # Bad agent responds
-        bad_response = call_bad_agent(
-            model=bad_model_id,
-            past_results=all_results,
-            past_thoughts=past_thoughts,
-            past_reasoning=past_reasoning,
-            bad_messages=bad_messages,
-            num_pulls=num_pulls
-        )
-        
-        if debug:
-            print(f"{RED}Bad Model ({bad_model_id}): {bad_response['llm_response']}{RESET}\n")
-            print(f"Bad Model Message: {bad_response['message']}")
-        
-        past_thoughts.append(bad_response['llm_response'])
-        if bad_response['message']:
-            bad_messages.append(bad_response['message'])
-        else:
-            bad_messages.append("")
+        if current_pull < num_pulls - 1:
+            bad_response = call_bad_agent(
+                model=bad_model_id,
+                past_results=all_results,
+                past_thoughts=past_thoughts,
+                past_reasoning=past_reasoning,
+                bad_messages=bad_messages,
+                num_pulls=num_pulls
+            )
+            
+            if debug:
+                print(f"{RED}Bad Model ({bad_model_id}): {bad_response['llm_response']}{RESET}\n")
+                print(f"Bad Model Message: {bad_response['message']}")
+            
+            past_thoughts.append(bad_response['llm_response'])
+            if bad_response['message']:
+                bad_messages.append(bad_response['message'])
+            else:
+                bad_messages.append("")
     
     if debug:
         print(get_summary(all_results, num_pulls))
