@@ -10,6 +10,7 @@ def conversation(num_pulls: int, good_model_id: str, bad_model_id: str, debug: b
     past_reasoning: list[str] = []
     past_thoughts: list[str] = []
     bad_messages: list[str] = []
+    cache_discount_warnings_shown: set[str] = set()
     
     for current_pull in range(num_pulls):
         # Good agent makes a decision
@@ -20,9 +21,17 @@ def conversation(num_pulls: int, good_model_id: str, bad_model_id: str, debug: b
             bad_messages=bad_messages,
             num_pulls=num_pulls
         )
+
+        good_cache_note = good_response.get("cache_discount_note")
+        good_warning_key = f"{good_model_id}:{good_cache_note}"
+        if good_cache_note and good_warning_key not in cache_discount_warnings_shown:
+            print(f"[cache-warning][{good_model_id}] {good_cache_note}")
+            cache_discount_warnings_shown.add(good_warning_key)
         
         if debug:
             print(f"{GREEN}Good Model ({good_model_id}): {good_response['llm_response']}{RESET}\n")
+            if good_response.get("usage"):
+                print(f"Usage ({good_model_id}): {good_response['usage']}")
         
         past_reasoning.append(good_response['llm_response'])
         
@@ -45,10 +54,18 @@ def conversation(num_pulls: int, good_model_id: str, bad_model_id: str, debug: b
                 bad_messages=bad_messages,
                 num_pulls=num_pulls
             )
+
+            bad_cache_note = bad_response.get("cache_discount_note")
+            bad_warning_key = f"{bad_model_id}:{bad_cache_note}"
+            if bad_cache_note and bad_warning_key not in cache_discount_warnings_shown:
+                print(f"[cache-warning][{bad_model_id}] {bad_cache_note}")
+                cache_discount_warnings_shown.add(bad_warning_key)
             
             if debug:
                 print(f"{RED}Bad Model ({bad_model_id}): {bad_response['llm_response']}{RESET}\n")
                 print(f"Bad Model Message: {bad_response['message']}")
+                if bad_response.get("usage"):
+                    print(f"Usage ({bad_model_id}): {bad_response['usage']}")
             
             past_thoughts.append(bad_response['llm_response'])
             if bad_response['message']:

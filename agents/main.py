@@ -1,10 +1,13 @@
 from agents.anthropic import Anthropic
 from agents.ollama import Ollama
+from agents.openai import OpenAI
+from agents.grok import Grok
+from agents.gemini import Gemini
 from agents.base import BaseLLM
 from prompts import get_good_prompt, get_bad_prompt
 from typing import Any
 
-clients: list[BaseLLM] = [Anthropic, Ollama]
+clients: list[BaseLLM] = [Anthropic, OpenAI, Grok, Gemini, Ollama]
 
 def _get_client(model: str) -> BaseLLM:
     """Get the appropriate LLM client for the given model."""
@@ -113,7 +116,10 @@ def call_good_agent(
     
     return {
         "llm_response": result["llm_response"],
-        "arm_pulled": arm_pulled
+        "arm_pulled": arm_pulled,
+        "usage": result.get("usage"),
+        "cache_discount_available": result.get("cache_discount_available"),
+        "cache_discount_note": result.get("cache_discount_note"),
     }
 
 
@@ -156,5 +162,8 @@ def call_bad_agent(
     
     return {
         "llm_response": result["llm_response"],
-        "message": message
+        "message": message,
+        "usage": result.get("usage"),
+        "cache_discount_available": result.get("cache_discount_available"),
+        "cache_discount_note": result.get("cache_discount_note"),
     }
