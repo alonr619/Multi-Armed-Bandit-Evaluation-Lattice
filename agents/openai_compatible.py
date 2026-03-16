@@ -46,15 +46,15 @@ class OpenAICompatible(BaseLLM):
         return cls.client
 
     @classmethod
-    def _normalize_conversation(cls, conversation: list[dict[str, str]]) -> list[dict[str, str]]:
+    def _normalize_conversation(cls, conversation: list[dict]) -> list[dict]:
         system_parts: list[str] = []
-        payload: list[dict[str, str]] = []
+        payload: list[dict] = []
 
         for msg in conversation:
             if msg["role"] == "system":
                 system_parts.append(msg["content"])
             else:
-                payload.append({"role": msg["role"], "content": msg["content"]})
+                payload.append(msg)
 
         if system_parts:
             return [{"role": "system", "content": "\n\n".join(system_parts)}, *payload]
@@ -110,7 +110,7 @@ class OpenAICompatible(BaseLLM):
 
     @classmethod
     def query(
-        cls, conversation: list[dict[str, str]], model: str, tools: list[dict[str, Any]]
+        cls, conversation: list[dict], model: str, tools: list[dict[str, Any]]
     ) -> dict[str, Any]:
         messages = cls._normalize_conversation(conversation)
         kwargs: dict[str, Any] = {
@@ -136,11 +136,49 @@ class OpenAICompatible(BaseLLM):
             response = cls.get_client().chat.completions.create(**kwargs)
 
         message = response.choices[0].message
+        tool_call = cls._parse_tool_call(message)
         usage, cache_discount_available, cache_discount_note = cls._parse_usage(response.usage)
+
+        # Build provider-native history turn for caching in subsequent calls.
+        tc_list = getattr(message, "tool_calls", None) or []
+        assistant_msg: dict[str, Any] = {
+            "role": "assistant",
+            "content": message.content,
+        }
+        if tc_list:
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in tc_list
+            ]
+
+        if tc_list:
+            tool_result_msgs = [
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": "ok",
+                }
+                for tc in tc_list
+            ]
+        else:
+            tool_result_msgs = []
+
+        history_turn = {
+            "assistant": assistant_msg,
+            "tool_result": tool_result_msgs,  # list for OpenAI (can be multiple)
+        }
 
         return {
             "llm_response": message.content or "",
-            "tool_call": cls._parse_tool_call(message),
+            "tool_call": tool_call,
+            "history_turn": history_turn,
             "usage": usage,
             "cache_discount_available": cache_discount_available,
             "cache_discount_note": cache_discount_note,
