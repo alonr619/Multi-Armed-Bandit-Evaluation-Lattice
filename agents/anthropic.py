@@ -112,13 +112,16 @@ class Anthropic(BaseLLM):
         # tool_result goes in the next user message
         tool_result_content = (
             [{"type": "tool_result", "tool_use_id": tool_use_id, "content": "ok"}]
-            if tool_call else
-            [{"type": "text", "text": "(no tool call)"}]
+            if tool_call else None
         )
 
         history_turn = {
             "assistant": {"role": "assistant", "content": assistant_content},
-            "tool_result": {"role": "user", "content": tool_result_content},
+            "tool_result": (
+                {"role": "user", "content": tool_result_content}
+                if tool_result_content is not None
+                else None
+            ),
         }
 
         usage = response.usage

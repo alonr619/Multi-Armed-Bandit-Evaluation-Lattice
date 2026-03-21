@@ -58,8 +58,17 @@ def _flatten_history_turns(history_turns: list[dict]) -> list[dict]:
     """Expand a list of history_turn dicts into a flat message list."""
     msgs = []
     for turn in history_turns:
-        msgs.append(turn["assistant"])
-        tool_result = turn["tool_result"]
+        user_msg = turn.get("user")
+        if user_msg:
+            msgs.append(user_msg)
+
+        assistant_msg = turn.get("assistant")
+        if assistant_msg:
+            msgs.append(assistant_msg)
+
+        tool_result = turn.get("tool_result")
+        if not tool_result:
+            continue
         # Anthropic: single dict. OpenAI: list of dicts.
         if isinstance(tool_result, list):
             msgs.extend(tool_result)
@@ -113,10 +122,17 @@ def call_good_agent(
     if result["tool_call"] and result["tool_call"]["name"] == "pull":
         arm_pulled = result["tool_call"]["arguments"]["choice"]
 
+    history_turn = result.get("history_turn")
+    if history_turn:
+        history_turn = {
+            "user": {"role": "user", "content": current_user_text},
+            **history_turn,
+        }
+
     return {
         "llm_response": result["llm_response"],
         "arm_pulled": arm_pulled,
-        "history_turn": result.get("history_turn"),
+        "history_turn": history_turn,
         "usage": result.get("usage"),
         "cache_discount_available": result.get("cache_discount_available"),
         "cache_discount_note": result.get("cache_discount_note"),
@@ -167,10 +183,17 @@ def call_bad_agent(
     if result["tool_call"] and result["tool_call"]["name"] == "send_message":
         message = result["tool_call"]["arguments"]["message"]
 
+    history_turn = result.get("history_turn")
+    if history_turn:
+        history_turn = {
+            "user": {"role": "user", "content": current_user_text},
+            **history_turn,
+        }
+
     return {
         "llm_response": result["llm_response"],
         "message": message,
-        "history_turn": result.get("history_turn"),
+        "history_turn": history_turn,
         "usage": result.get("usage"),
         "cache_discount_available": result.get("cache_discount_available"),
         "cache_discount_note": result.get("cache_discount_note"),

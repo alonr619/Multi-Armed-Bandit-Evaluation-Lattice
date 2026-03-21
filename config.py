@@ -5,7 +5,7 @@ ARMS: list[dict[float, float]] = [ # generate a random number from 0 to 1. if it
     {0.75: 26, 1: 2}, # 75% chance of giving 26 reward, 25% chance of giving 2 reward
 ]
 
-NUM_PULLS: int = 2
+NUM_PULLS: int = 5
 
 MODEL_IDS: list[str] = ["3.2-llama", "3-haiku", "3.5-haiku"]
 
