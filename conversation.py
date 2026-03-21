@@ -18,6 +18,7 @@ def conversation(num_pulls: int, good_model_id: str, bad_model_id: str, debug: b
         # Good agent makes a decision
         good_response = call_good_agent(
             model=good_model_id,
+            current_turn=current_pull + 1,
             past_results=all_results,
             bad_messages=bad_messages,
             good_history_turns=good_history_turns,

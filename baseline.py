@@ -16,17 +16,18 @@ if __name__ == "__main__":
     num_pulls = args.num_pulls
     
     all_results: list[tuple[int, float]] = []
-    past_reasoning: list[str] = []
     bad_messages: list[str] = []
+    good_history_turns: list[dict] = []
     
     for i in range(num_pulls):
         print(f"{RESET}{'='*25} PULL {i+1} OF {num_pulls} {'='*25}")
         
         response = call_good_agent(
             model=MODEL_ID,
+            current_turn=i + 1,
             past_results=all_results,
-            past_reasoning=past_reasoning,
             bad_messages=bad_messages,
+            good_history_turns=good_history_turns,
             num_pulls=num_pulls
         )
         
@@ -34,7 +35,8 @@ if __name__ == "__main__":
             print(response)
         print(f"{GREEN}{MODEL_ID}: {response['llm_response']}{RESET}\n")
         
-        past_reasoning.append(response['llm_response'])
+        if response.get("history_turn"):
+            good_history_turns.append(response["history_turn"])
         
         if response['arm_pulled'] is not None:
             arm = int(response['arm_pulled'])

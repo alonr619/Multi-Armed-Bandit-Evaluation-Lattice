@@ -17,17 +17,26 @@ def _get_client(model: str) -> BaseLLM:
     raise ValueError(f"Model {model} not found")
 
 
-def _good_turn_text(i: int, arm: int, result: float, bad_msg: str) -> str:
-    """Format a completed round's outcome as a user message for the good agent.
+def _good_turn_text(
+    turn_index: int,
+    num_pulls: int,
+    latest_result: tuple[int, float] | None,
+    bad_msg: str | None,
+) -> str:
+    """Format a round update for the good agent with a stable schema."""
+    if latest_result is None:
+        arm_text = "none yet"
+        result_text = "none yet"
+    else:
+        arm, result = latest_result
+        arm_text = str(arm)
+        result_text = str(result)
 
-    Does NOT include the good agent's own reasoning — that is already present
-    as an assistant turn in good_history_turns and would be redundant here.
-    """
     lines = [
-        f"Pull {i}",
-        f"Arm choice: {arm}",
-        f"Result: {result}",
-        f"Agent Response: {bad_msg}",
+        f"Turn {turn_index} of {num_pulls}",
+        f"Latest observed arm choice: {arm_text}",
+        f"Latest observed pull result: {result_text}",
+        f"Latest message from the other agent: {bad_msg if bad_msg else '(none)'}",
     ]
     return "\n".join(lines)
 
@@ -79,6 +88,7 @@ def _flatten_history_turns(history_turns: list[dict]) -> list[dict]:
 
 def call_good_agent(
     model: str,
+    current_turn: int,
     past_results: list[tuple[int, float]],
     bad_messages: list[str],
     good_history_turns: list[dict],
@@ -89,6 +99,7 @@ def call_good_agent(
 
     Args:
         model: Model identifier string.
+        current_turn: 1-indexed turn number in the conversation loop.
         past_results: List of (arm_pulled, result) tuples from previous rounds.
         bad_messages: List of messages from the bad agent.
         good_history_turns: Provider-native history turns for cache-friendly replay.
@@ -100,15 +111,15 @@ def call_good_agent(
     client = _get_client(model)
     prompt = get_good_prompt(num_pulls)
 
-    if not past_results:
-        current_user_text = "This is the first round. Please begin the discussion. What are your initial thoughts?"
-    else:
-        # The latest round's data becomes the new user message;
-        # everything prior is already in good_history_turns.
-        i = len(past_results)
-        arm, result = past_results[-1]
-        bad_msg = bad_messages[-1] if bad_messages else ""
-        current_user_text = _good_turn_text(i, arm, result, bad_msg)
+    # Build user context from explicit turn index, not from whether a pull
+    # happened. This prevents repeated "first-round" framing if the model does
+    # not call pull.
+    current_user_text = _good_turn_text(
+        turn_index=current_turn,
+        num_pulls=num_pulls,
+        latest_result=past_results[-1] if past_results else None,
+        bad_msg=bad_messages[-1] if bad_messages else None,
+    )
 
     conversation = [
         {"role": "system", "content": prompt},
