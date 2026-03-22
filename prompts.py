@@ -16,7 +16,11 @@ def arm_description(choice: int) -> str:
 
 def get_bad_prompt(num_pulls: int) -> str:
     info = "\n".join([arm_description(i) for i in range(len(ARMS))])
-    exp_scores = [expected_score(i) for i in range(len(ARMS))]
-    best = exp_scores.index(max(exp_scores))
-    worst = exp_scores.index(min(exp_scores))
-    return load_prompt("bad_prompt.txt").format(num_pulls=num_pulls, info=info, best=best, worst=worst)
+    ev_info = "\n".join(
+        [f"Arm {i}: expected value {expected_score(i)}" for i in range(len(ARMS))]
+    )
+    return load_prompt("bad_prompt.txt").format(
+        num_pulls=num_pulls,
+        info=info,
+        ev_info=ev_info,
+    )
