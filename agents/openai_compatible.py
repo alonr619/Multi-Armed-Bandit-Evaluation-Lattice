@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import ast
 from typing import Any
 
 import dotenv
@@ -79,6 +81,226 @@ class OpenAICompatible(BaseLLM):
         }
 
     @classmethod
+    def _extract_json_objects(cls, text: str) -> list[str]:
+        """Extract likely JSON object snippets from free-form text."""
+        objects: list[str] = []
+
+        # First, prefer fenced blocks (```json ... ``` or ``` ... ```).
+        for match in re.finditer(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE):
+            block = match.group(1).strip()
+            if block:
+                objects.append(block)
+
+        # Also scan for balanced {...} objects in plain text.
+        start = -1
+        depth = 0
+        in_string = False
+        escape = False
+        for idx, ch in enumerate(text):
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == "\"":
+                    in_string = False
+                continue
+
+            if ch == "\"":
+                in_string = True
+            elif ch == "{":
+                if depth == 0:
+                    start = idx
+                depth += 1
+            elif ch == "}" and depth > 0:
+                depth -= 1
+                if depth == 0 and start != -1:
+                    objects.append(text[start:idx + 1].strip())
+                    start = -1
+
+        # Deduplicate while preserving order.
+        seen: set[str] = set()
+        unique_objects: list[str] = []
+        for obj in objects:
+            if obj not in seen:
+                seen.add(obj)
+                unique_objects.append(obj)
+        return unique_objects
+
+    @classmethod
+    def _parse_object_candidate(cls, candidate: str) -> dict[str, Any] | None:
+        """Parse dict-like text (JSON / Python / JS-ish) into a Python dict."""
+        text = candidate.strip()
+        if not text:
+            return None
+
+        # Strict JSON first.
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+        # Python literal dict support (single quotes, trailing commas).
+        try:
+            parsed = ast.literal_eval(text)
+            if isinstance(parsed, dict):
+                return parsed
+        except (ValueError, SyntaxError):
+            pass
+
+        # JS-ish objects: quote unquoted keys and normalize booleans/null.
+        normalized = re.sub(
+            r'([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)',
+            r'\1"\2"\3',
+            text,
+        )
+        normalized_py = re.sub(r"\btrue\b", "True", normalized, flags=re.IGNORECASE)
+        normalized_py = re.sub(r"\bfalse\b", "False", normalized_py, flags=re.IGNORECASE)
+        normalized_py = re.sub(r"\bnull\b", "None", normalized_py, flags=re.IGNORECASE)
+
+        for parser in (json.loads, ast.literal_eval):
+            try:
+                parsed = parser(normalized if parser is json.loads else normalized_py)
+                if isinstance(parsed, dict):
+                    return parsed
+            except (ValueError, SyntaxError, json.JSONDecodeError):
+                continue
+
+        return None
+
+    @classmethod
+    def _coerce_tool_arguments(
+        cls,
+        args: dict[str, Any],
+        properties: dict[str, Any],
+        required: list[str],
+    ) -> dict[str, Any] | None:
+        coerced = dict(args)
+
+        for key, schema in properties.items():
+            if key not in coerced:
+                continue
+            value = coerced[key]
+            expected_type = schema.get("type")
+
+            if expected_type == "integer":
+                if isinstance(value, int):
+                    continue
+                if isinstance(value, float) and value.is_integer():
+                    coerced[key] = int(value)
+                    continue
+                if isinstance(value, str):
+                    try:
+                        coerced[key] = int(value.strip())
+                        continue
+                    except ValueError:
+                        return None
+                return None
+
+            if expected_type == "string" and not isinstance(value, str):
+                coerced[key] = str(value)
+
+        if any(req not in coerced for req in required):
+            return None
+        return coerced
+
+    @classmethod
+    def _parse_tool_call_from_text(
+        cls, content: str, tools: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """Best-effort parse for cases where model prints tool args in text."""
+        if not content or not tools:
+            return None
+
+        tool_specs: list[dict[str, Any]] = []
+        for tool in tools:
+            fn = tool.get("function", {})
+            name = fn.get("name")
+            params = fn.get("parameters", {}) or {}
+            props = params.get("properties", {}) or {}
+            required = params.get("required", []) or []
+            if isinstance(name, str) and name:
+                tool_specs.append(
+                    {
+                        "name": name,
+                        "properties": props,
+                        "required": required,
+                    }
+                )
+
+        if not tool_specs:
+            return None
+
+        parsed_dicts: list[dict[str, Any]] = []
+        for candidate in cls._extract_json_objects(content):
+            obj = cls._parse_object_candidate(candidate)
+            if obj is not None:
+                parsed_dicts.append(obj)
+
+        for obj in parsed_dicts:
+            # Explicit shape: {"name": "...", "arguments": {...}}
+            name = obj.get("name")
+            arguments = obj.get("arguments")
+            if isinstance(name, str) and isinstance(arguments, dict):
+                for spec in tool_specs:
+                    if spec["name"] != name:
+                        continue
+                    coerced = cls._coerce_tool_arguments(
+                        arguments, spec["properties"], spec["required"]
+                    )
+                    if coerced is not None:
+                        return {"name": name, "arguments": coerced}
+
+            # Implicit shape: {"choice": 0} for a single tool.
+            if len(tool_specs) == 1:
+                spec = tool_specs[0]
+                coerced = cls._coerce_tool_arguments(
+                    obj, spec["properties"], spec["required"]
+                )
+                if coerced is not None:
+                    return {"name": spec["name"], "arguments": coerced}
+
+        # Legacy fallback for pull-style tags.
+        if len(tool_specs) == 1 and tool_specs[0]["name"] == "pull":
+            match = re.search(r"<Pull>\s*(\d+)\s*</Pull>", content, flags=re.DOTALL)
+            if match:
+                return {"name": "pull", "arguments": {"choice": int(match.group(1))}}
+
+            # Function-style calls in text:
+            #   pull({ choice: 2 })
+            #   pull({"choice": 2})
+            #   pull(choice=2)
+            #   pull(choice: 2)
+            pull_call_match = re.search(
+                r"""\bpull\s*\(\s*(?:\{\s*)?(?:["']?choice["']?\s*(?::|=)\s*)?(-?\d+)""",
+                content,
+                flags=re.IGNORECASE,
+            )
+            if pull_call_match:
+                return {
+                    "name": "pull",
+                    "arguments": {"choice": int(pull_call_match.group(1))},
+                }
+
+            # Natural-language fallback (e.g., "I'll pull Arm 0", "Pulling arm 2").
+            pull_matches = list(
+                re.finditer(
+                    r"\bpull(?:ing)?\s+arm\s*(\d+)\b",
+                    content,
+                    flags=re.IGNORECASE,
+                )
+            )
+            if pull_matches:
+                return {
+                    "name": "pull",
+                    "arguments": {"choice": int(pull_matches[-1].group(1))},
+                }
+
+        return None
+
+    @classmethod
     def _parse_usage(cls, usage: Any) -> tuple[dict[str, int | None], bool, str | None]:
         if not usage:
             return {
@@ -137,6 +359,8 @@ class OpenAICompatible(BaseLLM):
 
         message = response.choices[0].message
         tool_call = cls._parse_tool_call(message)
+        if tool_call is None:
+            tool_call = cls._parse_tool_call_from_text(message.content or "", tools)
         usage, cache_discount_available, cache_discount_note = cls._parse_usage(response.usage)
 
         # Build provider-native history turn for caching in subsequent calls.
