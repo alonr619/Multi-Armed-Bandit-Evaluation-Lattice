@@ -6,6 +6,7 @@ class Gemini(OpenAICompatible):
     api_key_env_var = "GEMINI_API_KEY"
     base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
     provider_name = "Gemini"
+    reasoning_effort_override = "low"
     model_dict: dict[str, str] = {
         "gemini-3-flash-preview": "gemini-3-flash-preview",
         "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite-preview",

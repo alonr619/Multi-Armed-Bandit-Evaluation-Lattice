@@ -23,7 +23,10 @@ class OpenAICompatible(BaseLLM):
     base_url: str | None = None
     provider_name: str = "provider"
     token_limit_param: str = "max_tokens"
+    reasoning_effort_override: str | None = None
     client: OpenAIClient | None = None
+    unsupported_reasoning_effort_models: set[str] = set()
+    resolved_token_limit_param: str | None = None
 
     @classmethod
     def get_client(cls) -> OpenAIClient:
@@ -311,9 +314,13 @@ class OpenAICompatible(BaseLLM):
             }, False, f"Cached token discount reporting is not available for {cls.provider_name}."
 
         prompt_tokens_details = getattr(usage, "prompt_tokens_details", None)
+        completion_tokens_details = getattr(usage, "completion_tokens_details", None)
         cached_tokens = None
+        reasoning_tokens = None
         if prompt_tokens_details is not None:
             cached_tokens = getattr(prompt_tokens_details, "cached_tokens", None)
+        if completion_tokens_details is not None:
+            reasoning_tokens = getattr(completion_tokens_details, "reasoning_tokens", None)
 
         cache_discount_available = cached_tokens is not None
         cache_discount_note = None
@@ -326,6 +333,7 @@ class OpenAICompatible(BaseLLM):
         return {
             "input_tokens": getattr(usage, "prompt_tokens", None),
             "output_tokens": getattr(usage, "completion_tokens", None),
+            "reasoning_output_tokens": reasoning_tokens,
             "cache_creation_input_tokens": None,
             "cache_read_input_tokens": cached_tokens,
         }, cache_discount_available, cache_discount_note
@@ -335,28 +343,55 @@ class OpenAICompatible(BaseLLM):
         cls, conversation: list[dict], model: str, tools: list[dict[str, Any]]
     ) -> dict[str, Any]:
         messages = cls._normalize_conversation(conversation)
+        resolved_model = cls.get_model_id(model)
+        reasoning_effort = cls.reasoning_effort_override or OPENAI_COMPAT_REASONING_EFFORT
+        normalized_reasoning_effort = reasoning_effort.strip().lower()
+        reasoning_effort_key = f"{cls.__name__}:{resolved_model}"
+        token_limit_param = cls.resolved_token_limit_param or cls.token_limit_param
         kwargs: dict[str, Any] = {
-            "model": cls.get_model_id(model),
-            cls.token_limit_param: MAX_TOKENS,
+            "model": resolved_model,
+            token_limit_param: MAX_TOKENS,
             "messages": messages,
             "tools": tools,
-            "reasoning_effort": OPENAI_COMPAT_REASONING_EFFORT,
         }
+        if normalized_reasoning_effort and (
+            reasoning_effort_key not in cls.unsupported_reasoning_effort_models
+        ):
+            kwargs["reasoning_effort"] = reasoning_effort
 
-        try:
-            response = cls.get_client().chat.completions.create(**kwargs)
-        except Exception as exc:
-            error_text = str(exc).lower()
-            current_param = cls.token_limit_param
-            alt_param = "max_completion_tokens" if current_param == "max_tokens" else "max_tokens"
-            should_retry = current_param in error_text or alt_param in error_text
+        while True:
+            try:
+                response = cls.get_client().chat.completions.create(**kwargs)
+                break
+            except Exception as exc:
+                error_text = str(exc).lower()
+                current_param = (
+                    "max_completion_tokens"
+                    if "max_completion_tokens" in kwargs
+                    else "max_tokens"
+                )
+                alt_param = (
+                    "max_completion_tokens"
+                    if current_param == "max_tokens"
+                    else "max_tokens"
+                )
+                retried = False
 
-            if not should_retry:
-                raise
+                # Some OpenAI-compatible endpoints reject reasoning_effort.
+                if "reasoning_effort" in kwargs and "reasoning_effort" in error_text:
+                    kwargs.pop("reasoning_effort", None)
+                    cls.unsupported_reasoning_effort_models.add(reasoning_effort_key)
+                    retried = True
 
-            kwargs.pop(current_param, None)
-            kwargs[alt_param] = MAX_TOKENS
-            response = cls.get_client().chat.completions.create(**kwargs)
+                # Providers differ on token limit parameter name.
+                if current_param in error_text or alt_param in error_text:
+                    kwargs.pop(current_param, None)
+                    kwargs[alt_param] = MAX_TOKENS
+                    cls.resolved_token_limit_param = alt_param
+                    retried = True
+
+                if not retried:
+                    raise
 
         message = response.choices[0].message
         tool_call = cls._parse_tool_call(message)
