@@ -309,18 +309,33 @@ class OpenAICompatible(BaseLLM):
             return {
                 "input_tokens": None,
                 "output_tokens": None,
+                "reasoning_output_tokens": None,
+                "reasoning_output_tokens_estimate": None,
+                "total_tokens": None,
                 "cache_creation_input_tokens": None,
                 "cache_read_input_tokens": None,
             }, False, f"Cached token discount reporting is not available for {cls.provider_name}."
 
         prompt_tokens_details = getattr(usage, "prompt_tokens_details", None)
         completion_tokens_details = getattr(usage, "completion_tokens_details", None)
+        prompt_tokens = getattr(usage, "prompt_tokens", None)
+        completion_tokens = getattr(usage, "completion_tokens", None)
+        total_tokens = getattr(usage, "total_tokens", None)
         cached_tokens = None
         reasoning_tokens = None
+        reasoning_tokens_estimate = None
         if prompt_tokens_details is not None:
             cached_tokens = getattr(prompt_tokens_details, "cached_tokens", None)
         if completion_tokens_details is not None:
             reasoning_tokens = getattr(completion_tokens_details, "reasoning_tokens", None)
+        if (
+            reasoning_tokens is None
+            and isinstance(prompt_tokens, int)
+            and isinstance(completion_tokens, int)
+            and isinstance(total_tokens, int)
+            and total_tokens >= (prompt_tokens + completion_tokens)
+        ):
+            reasoning_tokens_estimate = total_tokens - prompt_tokens - completion_tokens
 
         cache_discount_available = cached_tokens is not None
         cache_discount_note = None
@@ -331,9 +346,11 @@ class OpenAICompatible(BaseLLM):
             )
 
         return {
-            "input_tokens": getattr(usage, "prompt_tokens", None),
-            "output_tokens": getattr(usage, "completion_tokens", None),
+            "input_tokens": prompt_tokens,
+            "output_tokens": completion_tokens,
             "reasoning_output_tokens": reasoning_tokens,
+            "reasoning_output_tokens_estimate": reasoning_tokens_estimate,
+            "total_tokens": total_tokens,
             "cache_creation_input_tokens": None,
             "cache_read_input_tokens": cached_tokens,
         }, cache_discount_available, cache_discount_note
