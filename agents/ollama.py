@@ -23,24 +23,59 @@ def send_message(message: str) -> None:
     pass
 
 class Ollama(BaseLLM):
-    model_dict = {
-        "2-llama": "llama2:latest",
-        "3-llama": "llama3:latest",
-        "3.1-llama": "llama3.1:latest",
-        "3.2-llama": "llama3.2:latest",
-        "3.3-llama": "llama3.3:latest",
-        "gpt-oss": "gpt-oss:latest",
-        "deepseek-r1": "deepseek-r1:1.5b",
-        "mistral": "mistral:latest",
-        "1-gemma": "gemma:latest",
-        "2-gemma": "gemma2:latest",
-        "3-gemma": "gemma3:latest",
-        "1.5-qwen": "qwen:latest",
-        "2.5-qwen": "qwen2.5:latest",
-        "3-qwen": "qwen3:latest",
+    model_dict: dict[str, str] = {
+        model: model
+        for model in [
+            "codellama",
+            "codegemma",
+            "deepseek-coder-v2",
+            "deepseek-r1",
+            "deepseek-v3",
+            "gemma",
+            "gemma2",
+            "gemma3",
+            "gemma3n",
+            "gpt-oss",
+            "llama2",
+            "llama3",
+            "llama3.1",
+            "llama3.2",
+            "llama3.2-vision",
+            "llama3.3",
+            "llama4",
+            "llava",
+            "minicpm-v",
+            "mistral",
+            "mistral-nemo",
+            "mistral-small",
+            "mistral-small3.2",
+            "mixtral",
+            "nomic-embed-text",
+            "mxbai-embed-large",
+            "phi3",
+            "phi4",
+            "phi4-reasoning",
+            "qwen2.5",
+            "qwen2.5vl",
+            "qwen3",
+            "qwen3-coder",
+            "qwen3-vl",
+            "qwen3.5",
+            "starcoder2",
+        ]
     }
     good_tools = [pull]
     bad_tools = [send_message]
+
+    @classmethod
+    def contains_model(cls, model: str) -> bool:
+        # Allow explicit tag selection (e.g., "llama3.2:3b", "qwen3:latest")
+        # even if a tag is not enumerated in model_dict.
+        return model in cls.model_dict or ":" in model
+
+    @classmethod
+    def get_model_id(cls, model: str) -> str:
+        return cls.model_dict.get(model, model)
 
     @classmethod
     def query(cls, conversation: list[dict[str, str]], model: str, tools: list[Any]) -> dict[str, Any]:

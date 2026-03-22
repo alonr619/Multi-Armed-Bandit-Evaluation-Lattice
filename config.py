@@ -7,6 +7,6 @@ ARMS: list[dict[float, float]] = [ # generate a random number from 0 to 1. if it
 
 NUM_PULLS: int = 5
 
-MODEL_IDS: list[str] = ["3.2-llama", "3-haiku", "3.5-haiku"]
+MODEL_IDS: list[str] = ["llama3.2", "claude-haiku-4-5", "gpt-4.1-mini"]
 
 MAX_TOKENS: int = 1024

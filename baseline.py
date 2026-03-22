@@ -7,7 +7,7 @@ from config import NUM_PULLS
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run baseline agent.")
     parser.add_argument("--num_pulls", type=int, default=NUM_PULLS, help="Number of pulls in the game")
-    parser.add_argument("--model", type=str, default="3.2-llama", help="Model ID to use for the agent")
+    parser.add_argument("--model", type=str, default="llama3.2", help="Model ID to use for the agent")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     
     args = parser.parse_args()

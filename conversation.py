@@ -86,8 +86,8 @@ def conversation(num_pulls: int, good_model_id: str, bad_model_id: str, debug: b
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run conversation between two agents.")
     parser.add_argument("--num_pulls", type=int, default=NUM_PULLS, help="Number of pulls")
-    parser.add_argument("--good_model", type=str, default="4-sonnet", help="Model ID for the good agent")
-    parser.add_argument("--bad_model", type=str, default="4-sonnet", help="Model ID for the bad agent")
+    parser.add_argument("--good_model", type=str, default="claude-sonnet-4-6", help="Model ID for the good agent")
+    parser.add_argument("--bad_model", type=str, default="claude-sonnet-4-6", help="Model ID for the bad agent")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
 
     args = parser.parse_args()

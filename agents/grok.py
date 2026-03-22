@@ -14,17 +14,17 @@ class Grok(OpenAICompatible):
     # per process), so separate evaluation runs get independent cache scopes.
     _conv_id: str = str(uuid.uuid4())
     model_dict: dict[str, str] = {
-        "grok-4-latest": "grok-4-latest",
-        "grok-4": "grok-4",
         "grok-4-0709": "grok-4-0709",
-        "grok-4-fast-reasoning": "grok-4-fast-reasoning",
+        "grok-4-1-fast-non-reasoning": "grok-4-1-fast-non-reasoning",
         "grok-4-1-fast-reasoning": "grok-4-1-fast-reasoning",
-        "grok-3-latest": "grok-3-latest",
+        "grok-4-fast-non-reasoning": "grok-4-fast-non-reasoning",
+        "grok-4-fast-reasoning": "grok-4-fast-reasoning",
+        "grok-4.20-0309-non-reasoning": "grok-4.20-0309-non-reasoning",
+        "grok-4.20-0309-reasoning": "grok-4.20-0309-reasoning",
+        "grok-4.20-multi-agent-0309": "grok-4.20-multi-agent-0309",
         "grok-3": "grok-3",
-        "grok-3-fast": "grok-3-fast",
-        "grok-3-fast-latest": "grok-3-fast-latest",
         "grok-3-mini": "grok-3-mini",
-        "grok-3-mini-latest": "grok-3-mini-latest",
+        "grok-code-fast-1": "grok-code-fast-1",
     }
     good_tools = OPENAI_GOOD_TOOLS
     bad_tools = OPENAI_BAD_TOOLS
