@@ -3,7 +3,7 @@ import os
 import dotenv
 from typing import Any
 from agents.base import BaseLLM
-from config import MAX_TOKENS
+from config import MAX_TOKENS, ANTHROPIC_THINKING
 from agents.tools import ANTHROPIC_GOOD_TOOLS, ANTHROPIC_BAD_TOOLS
 
 dotenv.load_dotenv()
@@ -74,6 +74,7 @@ class Anthropic(BaseLLM):
             "max_tokens": MAX_TOKENS,
             "messages": payload,
             "tools": tools,
+            "thinking": dict(ANTHROPIC_THINKING),
         }
         if system_parts:
             kwargs["system"] = [

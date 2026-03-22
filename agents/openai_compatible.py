@@ -13,7 +13,7 @@ except ImportError as exc:
     OPENAI_IMPORT_ERROR = exc
 
 from agents.base import BaseLLM
-from config import MAX_TOKENS
+from config import MAX_TOKENS, OPENAI_COMPAT_REASONING_EFFORT
 
 dotenv.load_dotenv()
 
@@ -340,6 +340,7 @@ class OpenAICompatible(BaseLLM):
             cls.token_limit_param: MAX_TOKENS,
             "messages": messages,
             "tools": tools,
+            "reasoning_effort": OPENAI_COMPAT_REASONING_EFFORT,
         }
 
         try:
