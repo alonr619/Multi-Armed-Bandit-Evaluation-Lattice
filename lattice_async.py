@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import concurrent.futures
 import contextlib
 import csv
 import os
@@ -219,6 +220,21 @@ def _build_log_path(output_root: Path, lattice_name: str, now: datetime) -> Path
     return output_root / lattice_name / "logs" / f"{_timestamp_for_filename(now)}.log"
 
 
+def _default_threadpool_workers() -> int:
+    # Matches Python's default ThreadPoolExecutor sizing formula.
+    return min(32, (os.cpu_count() or 1) + 4)
+
+
+def _resolve_threadpool_workers(
+    requested_workers: int | None,
+    *,
+    max_concurrent_games: int,
+) -> int:
+    if requested_workers is None:
+        return max(max_concurrent_games, _default_threadpool_workers())
+    return max(1, requested_workers)
+
+
 def _print_run_header(
     *,
     run_started_at: datetime,
@@ -226,6 +242,7 @@ def _print_run_header(
     lattice: LatticeSpec,
     args: argparse.Namespace,
     settings_report: SettingsLoadReport,
+    threadpool_workers: int,
 ) -> None:
     cli_command = shlex.join([Path(sys.executable).name, *sys.argv])
 
@@ -240,6 +257,7 @@ def _print_run_header(
     print(f"  num_pulls={args.num_pulls}")
     print(f"  repeats={args.repeats}")
     print(f"  max_concurrent_games={args.max_concurrent_games}")
+    print(f"  threadpool_workers={threadpool_workers}")
     print(f"  output_dir={args.output_dir.resolve()}")
     print(f"  debug={args.debug}")
     print(f"  settings_file={args.settings_file}")
@@ -496,6 +514,15 @@ def _parse_args() -> argparse.Namespace:
         help="Maximum games run in parallel. Games remain turn-sequential internally.",
     )
     parser.add_argument(
+        "--threadpool-workers",
+        type=int,
+        default=None,
+        help=(
+            "Worker threads used by asyncio.to_thread for game execution. "
+            "Default: max(max_concurrent_games, Python default threadpool size)."
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=Path("results/async_lattices"),
@@ -531,6 +558,10 @@ def _parse_args() -> argparse.Namespace:
 async def _async_main() -> None:
     args = _parse_args()
     settings_report = _load_settings_file(args.settings_file)
+    threadpool_workers = _resolve_threadpool_workers(
+        args.threadpool_workers,
+        max_concurrent_games=args.max_concurrent_games,
+    )
 
     selected = (
         [LATTICES["openai-none"], LATTICES["mixed-low"]]
@@ -539,41 +570,45 @@ async def _async_main() -> None:
     )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-
-    for lattice in selected:
-        run_started_at = datetime.now()
-        log_path = _build_log_path(args.output_dir, lattice.name, run_started_at)
-        with _tee_terminal_output(log_path):
-            try:
-                _print_run_header(
-                    run_started_at=run_started_at,
-                    log_path=log_path,
-                    lattice=lattice,
-                    args=args,
-                    settings_report=settings_report,
-                )
-                print(
-                    f"[{lattice.name}] starting: {len(lattice.models)} models, "
-                    f"{args.repeats} repeat(s), {args.num_pulls} pulls, "
-                    f"max_concurrent_games={args.max_concurrent_games}"
-                )
-                start = time.perf_counter()
-                await _run_lattice(
-                    lattice,
-                    num_pulls=args.num_pulls,
-                    repeats=args.repeats,
-                    max_concurrent_games=args.max_concurrent_games,
-                    output_root=args.output_dir,
-                    debug=args.debug,
-                )
-                elapsed = time.perf_counter() - start
-                print(f"[{lattice.name}] elapsed {elapsed:.2f}s")
-            except Exception:
-                print(f"[{lattice.name}] unhandled exception:")
-                traceback.print_exc()
-                raise
-            finally:
-                print(f"[{lattice.name}] log saved: {log_path.resolve()}")
+    loop = asyncio.get_running_loop()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=threadpool_workers) as pool:
+        loop.set_default_executor(pool)
+        for lattice in selected:
+            run_started_at = datetime.now()
+            log_path = _build_log_path(args.output_dir, lattice.name, run_started_at)
+            with _tee_terminal_output(log_path):
+                try:
+                    _print_run_header(
+                        run_started_at=run_started_at,
+                        log_path=log_path,
+                        lattice=lattice,
+                        args=args,
+                        settings_report=settings_report,
+                        threadpool_workers=threadpool_workers,
+                    )
+                    print(
+                        f"[{lattice.name}] starting: {len(lattice.models)} models, "
+                        f"{args.repeats} repeat(s), {args.num_pulls} pulls, "
+                        f"max_concurrent_games={args.max_concurrent_games}, "
+                        f"threadpool_workers={threadpool_workers}"
+                    )
+                    start = time.perf_counter()
+                    await _run_lattice(
+                        lattice,
+                        num_pulls=args.num_pulls,
+                        repeats=args.repeats,
+                        max_concurrent_games=args.max_concurrent_games,
+                        output_root=args.output_dir,
+                        debug=args.debug,
+                    )
+                    elapsed = time.perf_counter() - start
+                    print(f"[{lattice.name}] elapsed {elapsed:.2f}s")
+                except Exception:
+                    print(f"[{lattice.name}] unhandled exception:")
+                    traceback.print_exc()
+                    raise
+                finally:
+                    print(f"[{lattice.name}] log saved: {log_path.resolve()}")
 
 
 if __name__ == "__main__":
