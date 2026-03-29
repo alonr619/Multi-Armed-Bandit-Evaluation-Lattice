@@ -4,6 +4,7 @@ import re
 import threading
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -36,6 +37,10 @@ _DEFAULT_BACKOFF_JITTER = 0.2
 
 _THROTTLES: dict[str, "_ProviderThrottle"] = {}
 _THROTTLES_LOCK = threading.Lock()
+_RETRY_LOG_SINK: ContextVar[Callable[[str], None] | None] = ContextVar(
+    "retry_log_sink",
+    default=None,
+)
 
 
 def _provider_env_prefix(provider_name: str) -> str:
@@ -197,6 +202,23 @@ def provider_request_slot(provider_name: str) -> Iterator[None]:
         throttle.release()
 
 
+@contextmanager
+def retry_log_sink(sink: Callable[[str], None] | None) -> Iterator[None]:
+    token = _RETRY_LOG_SINK.set(sink)
+    try:
+        yield
+    finally:
+        _RETRY_LOG_SINK.reset(token)
+
+
+def _emit_retry_log(message: str) -> None:
+    sink = _RETRY_LOG_SINK.get()
+    if sink is None:
+        print(message)
+        return
+    sink(message)
+
+
 def call_with_retry(
     fn: Callable[[], T],
     *,
@@ -253,7 +275,7 @@ def call_with_retry(
                 sleep_seconds *= jitter_multiplier
 
             attempt += 1
-            print(
+            _emit_retry_log(
                 f"[retry][{provider_name}][{model}] attempt {attempt}/{max_retries} "
                 f"in {sleep_seconds:.2f}s after {type(exc).__name__}: {exc}"
             )

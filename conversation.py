@@ -2,12 +2,20 @@ from agents.main import call_good_agent, call_bad_agent
 from bandit import n_armed_bandit
 from util import GREEN, RED, RESET, get_summary
 import argparse
+from typing import Callable
 from config import NUM_PULLS
 
 
-def conversation(num_pulls: int, good_model_id: str, bad_model_id: str, debug: bool = False) -> list[tuple[int, float]]:
+def conversation(
+    num_pulls: int,
+    good_model_id: str,
+    bad_model_id: str,
+    debug: bool = False,
+    emit: Callable[[str], None] | None = None,
+) -> list[tuple[int, float]]:
     all_results: list[tuple[int, float]] = []
     past_reasoning: list[str] = []
+    log = emit if emit is not None else print
 
     bad_messages: list[str] = []
     good_history_turns: list[dict] = []
@@ -28,13 +36,13 @@ def conversation(num_pulls: int, good_model_id: str, bad_model_id: str, debug: b
         good_cache_note = good_response.get("cache_discount_note")
         good_warning_key = f"{good_model_id}:{good_cache_note}"
         if good_cache_note and good_warning_key not in cache_discount_warnings_shown:
-            print(f"[cache-warning][{good_model_id}] {good_cache_note}")
+            log(f"[cache-warning][{good_model_id}] {good_cache_note}")
             cache_discount_warnings_shown.add(good_warning_key)
         
         if debug:
-            print(f"{GREEN}Good Model ({good_model_id}): {good_response['llm_response']}{RESET}\n")
+            log(f"{GREEN}Good Model ({good_model_id}): {good_response['llm_response']}{RESET}\n")
             if good_response.get("usage"):
-                print(f"Usage ({good_model_id}): {good_response['usage']}")
+                log(f"Usage ({good_model_id}): {good_response['usage']}")
         
         past_reasoning.append(good_response['llm_response'])
         if good_response.get("history_turn"):
@@ -47,7 +55,7 @@ def conversation(num_pulls: int, good_model_id: str, bad_model_id: str, debug: b
             all_results.append((arm, result))
 
             if debug:
-                print(f"{RESET}Pull {current_pull + 1}: arm {arm} gave {result} points")
+                log(f"{RESET}Pull {current_pull + 1}: arm {arm} gave {result} points")
 
         # Bad agent responds
         if current_pull < num_pulls - 1:
@@ -62,14 +70,14 @@ def conversation(num_pulls: int, good_model_id: str, bad_model_id: str, debug: b
             bad_cache_note = bad_response.get("cache_discount_note")
             bad_warning_key = f"{bad_model_id}:{bad_cache_note}"
             if bad_cache_note and bad_warning_key not in cache_discount_warnings_shown:
-                print(f"[cache-warning][{bad_model_id}] {bad_cache_note}")
+                log(f"[cache-warning][{bad_model_id}] {bad_cache_note}")
                 cache_discount_warnings_shown.add(bad_warning_key)
             
             if debug:
-                print(f"{RED}Bad Model ({bad_model_id}): {bad_response['llm_response']}{RESET}\n")
-                print(f"Bad Model Message: {bad_response['message']}")
+                log(f"{RED}Bad Model ({bad_model_id}): {bad_response['llm_response']}{RESET}\n")
+                log(f"Bad Model Message: {bad_response['message']}")
                 if bad_response.get("usage"):
-                    print(f"Usage ({bad_model_id}): {bad_response['usage']}")
+                    log(f"Usage ({bad_model_id}): {bad_response['usage']}")
             
             if bad_response.get("history_turn"):
                 bad_history_turns.append(bad_response["history_turn"])
@@ -79,7 +87,7 @@ def conversation(num_pulls: int, good_model_id: str, bad_model_id: str, debug: b
                 bad_messages.append("")
     
     if debug:
-        print(get_summary(all_results, num_pulls))
+        log(get_summary(all_results, num_pulls))
     return all_results
 
 

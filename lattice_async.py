@@ -1,18 +1,26 @@
 import argparse
 import asyncio
+import contextlib
 import csv
 import os
 import re
+import shlex
 import statistics
+import sys
+import threading
 import time
+import traceback
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+from typing import TextIO
 
 import agents.anthropic as anthropic_module
 from agents.gemini import Gemini
 from agents.grok import Grok
 from agents.openai import OpenAI
+from agents.resilience import retry_log_sink
 from config import NUM_PULLS
 from conversation import conversation
 from dotenv import dotenv_values
@@ -48,6 +56,16 @@ class MatchResult:
     total_score: float
     expected_score: float
     elapsed_seconds: float
+    match_log_path: Path
+
+
+@dataclass(frozen=True)
+class SettingsLoadReport:
+    path: Path
+    exists: bool
+    file_values: dict[str, str]
+    applied_keys: tuple[str, ...]
+    skipped_keys: tuple[str, ...]
 
 
 LATTICES: dict[str, LatticeSpec] = {
@@ -115,45 +133,172 @@ def _build_match_tasks(models: tuple[str, ...], repeats: int) -> list[MatchTask]
     ]
 
 
-def _load_settings_file(path: Path) -> None:
+def _build_match_log_path(match_logs_dir: Path, task: MatchTask) -> Path:
+    return match_logs_dir / (
+        f"{_safe_name(task.good_model)}_vs_{_safe_name(task.bad_model)}"
+        f"_r{task.repeat_index:03d}.log"
+    )
+
+
+def _load_settings_file(path: Path) -> SettingsLoadReport:
     if not path.exists():
-        print(f"[settings] no settings file at {path}; using environment/default values.")
-        return
+        return SettingsLoadReport(
+            path=path,
+            exists=False,
+            file_values={},
+            applied_keys=(),
+            skipped_keys=(),
+        )
 
     values = dotenv_values(path)
-    applied = 0
-    skipped = 0
+    file_values: dict[str, str] = {}
+    applied_keys: list[str] = []
+    skipped_keys: list[str] = []
     for key, value in values.items():
         if value is None:
             continue
+        file_values[key] = value
         if key in os.environ:
-            skipped += 1
+            skipped_keys.append(key)
             continue
         os.environ[key] = value
-        applied += 1
+        applied_keys.append(key)
 
-    print(
-        f"[settings] loaded {applied} var(s) from {path} "
-        f"(skipped {skipped} already-set env var(s))."
+    return SettingsLoadReport(
+        path=path,
+        exists=True,
+        file_values=file_values,
+        applied_keys=tuple(applied_keys),
+        skipped_keys=tuple(skipped_keys),
     )
+
+
+class _TeeStream:
+    def __init__(self, *streams: TextIO, lock: threading.Lock):
+        self._streams = streams
+        self._lock = lock
+
+    def write(self, data: str) -> int:
+        with self._lock:
+            for stream in self._streams:
+                stream.write(data)
+                if data.endswith("\n"):
+                    stream.flush()
+        return len(data)
+
+    def flush(self) -> None:
+        with self._lock:
+            for stream in self._streams:
+                stream.flush()
+
+    def isatty(self) -> bool:
+        return any(getattr(stream, "isatty", lambda: False)() for stream in self._streams)
+
+
+@contextlib.contextmanager
+def _tee_terminal_output(log_path: Path):
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+        shared_lock = threading.Lock()
+        sys.stdout = _TeeStream(original_stdout, log_file, lock=shared_lock)
+        sys.stderr = _TeeStream(original_stderr, log_file, lock=shared_lock)
+        try:
+            yield
+        finally:
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+
+
+def _timestamp_for_filename(now: datetime) -> str:
+    return now.strftime("%Y%m%d_%H%M%S_%f")
+
+
+def _build_log_path(output_root: Path, lattice_name: str, now: datetime) -> Path:
+    return output_root / lattice_name / "logs" / f"{_timestamp_for_filename(now)}.log"
+
+
+def _print_run_header(
+    *,
+    run_started_at: datetime,
+    log_path: Path,
+    lattice: LatticeSpec,
+    args: argparse.Namespace,
+    settings_report: SettingsLoadReport,
+) -> None:
+    cli_command = shlex.join([Path(sys.executable).name, *sys.argv])
+
+    print("=" * 100)
+    print(f"Run timestamp: {run_started_at.isoformat()}")
+    print(f"Lattice: {lattice.name}")
+    print(f"CLI command: {cli_command}")
+    print(f"Working directory: {Path.cwd()}")
+    print(f"Log file: {log_path.resolve()}")
+    print("Arguments:")
+    print(f"  lattice={args.lattice}")
+    print(f"  num_pulls={args.num_pulls}")
+    print(f"  repeats={args.repeats}")
+    print(f"  max_concurrent_games={args.max_concurrent_games}")
+    print(f"  output_dir={args.output_dir.resolve()}")
+    print(f"  debug={args.debug}")
+    print(f"  settings_file={args.settings_file}")
+    print("Reasoning profile:")
+    print(f"  openai_effort={lattice.reasoning.openai_effort}")
+    print(f"  anthropic_effort={lattice.reasoning.anthropic_effort}")
+    print(f"  anthropic_thinking_type={lattice.reasoning.anthropic_thinking_type}")
+    print(f"  gemini_effort={lattice.reasoning.gemini_effort}")
+
+    if not settings_report.exists:
+        print(f"[settings] no settings file at {settings_report.path}; using environment/default values.")
+    else:
+        print(
+            f"[settings] loaded {len(settings_report.applied_keys)} var(s) from {settings_report.path} "
+            f"(skipped {len(settings_report.skipped_keys)} already-set env var(s))."
+        )
+        print("[settings] effective values:")
+        for key in sorted(settings_report.file_values):
+            value = os.environ.get(key, settings_report.file_values[key])
+            source = "env" if key in settings_report.skipped_keys else "settings-file"
+            print(f"  {key}={value}  (source={source})")
+
+    print("=" * 100)
 
 
 async def _run_single_match(
     task: MatchTask,
     *,
     game_slot: asyncio.Semaphore,
+    match_logs_dir: Path,
     num_pulls: int,
     debug: bool,
 ) -> MatchResult:
+    match_log_path = _build_match_log_path(match_logs_dir, task)
+
+    def _run_conversation_with_match_log() -> list[tuple[int, float]]:
+        match_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with match_log_path.open("w", encoding="utf-8", buffering=1) as match_log:
+            def emit(message: str) -> None:
+                text = message if message.endswith("\n") else f"{message}\n"
+                match_log.write(text)
+
+            emit(f"Match: {task.good_model} (good) vs {task.bad_model} (bad)")
+            emit(f"Repeat index: {task.repeat_index}")
+            emit(f"Debug mode: {debug}")
+            emit("-" * 80)
+
+            with retry_log_sink(emit):
+                return conversation(
+                    num_pulls,
+                    task.good_model,
+                    task.bad_model,
+                    debug,
+                    emit=emit,
+                )
+
     async with game_slot:
         start = time.perf_counter()
-        pulls = await asyncio.to_thread(
-            conversation,
-            num_pulls,
-            task.good_model,
-            task.bad_model,
-            debug,
-        )
+        pulls = await asyncio.to_thread(_run_conversation_with_match_log)
         elapsed_seconds = time.perf_counter() - start
         return MatchResult(
             task=task,
@@ -161,6 +306,7 @@ async def _run_single_match(
             total_score=total_score(pulls),
             expected_score=total_expected_score(pulls),
             elapsed_seconds=elapsed_seconds,
+            match_log_path=match_log_path,
         )
 
 
@@ -185,6 +331,7 @@ async def _run_lattice(
     tasks = _build_match_tasks(lattice.models, repeats)
     lattice_dir = output_root / lattice.name
     matches_dir = lattice_dir / "matches"
+    match_logs_dir = lattice_dir / "match_logs"
 
     game_slot = asyncio.Semaphore(max_concurrent_games)
     async def _run_and_capture(task: MatchTask) -> tuple[MatchTask, MatchResult | None, Exception | None]:
@@ -192,6 +339,7 @@ async def _run_lattice(
             result = await _run_single_match(
                 task,
                 game_slot=game_slot,
+                match_logs_dir=match_logs_dir,
                 num_pulls=num_pulls,
                 debug=debug,
             )
@@ -224,7 +372,8 @@ async def _run_lattice(
                 f"{result.task.good_model} vs {result.task.bad_model} "
                 f"(run {result.task.repeat_index}) "
                 f"total={result.total_score:.3f} expected={result.expected_score:.3f} "
-                f"time={result.elapsed_seconds:.2f}s"
+                f"time={result.elapsed_seconds:.2f}s "
+                f"log={result.match_log_path}"
             )
         else:
             completed += 1
@@ -242,7 +391,15 @@ async def _run_lattice(
     expected_values: dict[tuple[str, str], list[float]] = defaultdict(list)
 
     run_rows: list[list[object]] = [
-        ["good_model", "bad_model", "repeat_index", "actual_score", "expected_score", "elapsed_seconds"]
+        [
+            "good_model",
+            "bad_model",
+            "repeat_index",
+            "actual_score",
+            "expected_score",
+            "elapsed_seconds",
+            "match_log_path",
+        ]
     ]
     for result in successful_results:
         pair = (result.task.good_model, result.task.bad_model)
@@ -256,15 +413,24 @@ async def _run_lattice(
                 result.total_score,
                 result.expected_score,
                 round(result.elapsed_seconds, 3),
+                str(result.match_log_path.resolve()),
             ]
         )
 
     _write_csv(lattice_dir / "runs.csv", run_rows)
 
     if failures:
-        failure_rows = [["good_model", "bad_model", "repeat_index", "error"]]
+        failure_rows = [["good_model", "bad_model", "repeat_index", "match_log_path", "error"]]
         for task, exc in failures:
-            failure_rows.append([task.good_model, task.bad_model, task.repeat_index, str(exc)])
+            failure_rows.append(
+                [
+                    task.good_model,
+                    task.bad_model,
+                    task.repeat_index,
+                    str(_build_match_log_path(match_logs_dir, task).resolve()),
+                    str(exc),
+                ]
+            )
         _write_csv(lattice_dir / "failures.csv", failure_rows)
 
     actual_mean = {(g, b): _mean(actual_values[(g, b)]) for g in lattice.models for b in lattice.models}
@@ -338,7 +504,17 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--debug",
         action="store_true",
+        default=True,
         help="Enable verbose per-turn game logging (can be very noisy with concurrency).",
+    )
+    parser.add_argument(
+        "--no-debug",
+        action="store_false",
+        dest="debug",
+        help=(
+            "Disable per-turn conversation logging. "
+            "By default, debug logging is enabled and saved into run log files."
+        ),
     )
     parser.add_argument(
         "--settings-file",
@@ -354,7 +530,7 @@ def _parse_args() -> argparse.Namespace:
 
 async def _async_main() -> None:
     args = _parse_args()
-    _load_settings_file(args.settings_file)
+    settings_report = _load_settings_file(args.settings_file)
 
     selected = (
         [LATTICES["openai-none"], LATTICES["mixed-low"]]
@@ -365,23 +541,43 @@ async def _async_main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     for lattice in selected:
-        print(
-            f"[{lattice.name}] starting: {len(lattice.models)} models, "
-            f"{args.repeats} repeat(s), {args.num_pulls} pulls, "
-            f"max_concurrent_games={args.max_concurrent_games}"
-        )
-        start = time.perf_counter()
-        await _run_lattice(
-            lattice,
-            num_pulls=args.num_pulls,
-            repeats=args.repeats,
-            max_concurrent_games=args.max_concurrent_games,
-            output_root=args.output_dir,
-            debug=args.debug,
-        )
-        elapsed = time.perf_counter() - start
-        print(f"[{lattice.name}] elapsed {elapsed:.2f}s")
+        run_started_at = datetime.now()
+        log_path = _build_log_path(args.output_dir, lattice.name, run_started_at)
+        with _tee_terminal_output(log_path):
+            try:
+                _print_run_header(
+                    run_started_at=run_started_at,
+                    log_path=log_path,
+                    lattice=lattice,
+                    args=args,
+                    settings_report=settings_report,
+                )
+                print(
+                    f"[{lattice.name}] starting: {len(lattice.models)} models, "
+                    f"{args.repeats} repeat(s), {args.num_pulls} pulls, "
+                    f"max_concurrent_games={args.max_concurrent_games}"
+                )
+                start = time.perf_counter()
+                await _run_lattice(
+                    lattice,
+                    num_pulls=args.num_pulls,
+                    repeats=args.repeats,
+                    max_concurrent_games=args.max_concurrent_games,
+                    output_root=args.output_dir,
+                    debug=args.debug,
+                )
+                elapsed = time.perf_counter() - start
+                print(f"[{lattice.name}] elapsed {elapsed:.2f}s")
+            except Exception:
+                print(f"[{lattice.name}] unhandled exception:")
+                traceback.print_exc()
+                raise
+            finally:
+                print(f"[{lattice.name}] log saved: {log_path.resolve()}")
 
 
 if __name__ == "__main__":
-    asyncio.run(_async_main())
+    try:
+        asyncio.run(_async_main())
+    except Exception:
+        raise SystemExit(1)
