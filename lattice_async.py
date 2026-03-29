@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import csv
+import os
 import re
 import statistics
 import time
@@ -14,6 +15,7 @@ from agents.grok import Grok
 from agents.openai import OpenAI
 from config import NUM_PULLS
 from conversation import conversation
+from dotenv import dotenv_values
 from util import get_summary_rows, total_expected_score, total_score
 
 
@@ -111,6 +113,29 @@ def _build_match_tasks(models: tuple[str, ...], repeats: int) -> list[MatchTask]
         for good_model in models
         for bad_model in models
     ]
+
+
+def _load_settings_file(path: Path) -> None:
+    if not path.exists():
+        print(f"[settings] no settings file at {path}; using environment/default values.")
+        return
+
+    values = dotenv_values(path)
+    applied = 0
+    skipped = 0
+    for key, value in values.items():
+        if value is None:
+            continue
+        if key in os.environ:
+            skipped += 1
+            continue
+        os.environ[key] = value
+        applied += 1
+
+    print(
+        f"[settings] loaded {applied} var(s) from {path} "
+        f"(skipped {skipped} already-set env var(s))."
+    )
 
 
 async def _run_single_match(
@@ -315,11 +340,21 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable verbose per-turn game logging (can be very noisy with concurrency).",
     )
+    parser.add_argument(
+        "--settings-file",
+        type=Path,
+        default=Path("lattice_async.settings.txt"),
+        help=(
+            "Path to .env-style settings file. If present, values are loaded before running. "
+            "Existing environment variables take precedence over file values."
+        ),
+    )
     return parser.parse_args()
 
 
 async def _async_main() -> None:
     args = _parse_args()
+    _load_settings_file(args.settings_file)
 
     selected = (
         [LATTICES["openai-none"], LATTICES["mixed-low"]]
