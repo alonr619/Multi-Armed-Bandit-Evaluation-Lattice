@@ -13,6 +13,7 @@ except ImportError as exc:
     OPENAI_IMPORT_ERROR = exc
 
 from agents.base import BaseLLM
+from agents.resilience import call_with_retry
 from config import MAX_TOKENS, OPENAI_COMPAT_REASONING_EFFORT
 
 dotenv.load_dotenv()
@@ -378,7 +379,11 @@ class OpenAICompatible(BaseLLM):
 
         while True:
             try:
-                response = cls.get_client().chat.completions.create(**kwargs)
+                response = call_with_retry(
+                    lambda: cls.get_client().chat.completions.create(**kwargs),
+                    provider_name=cls.provider_name,
+                    model=resolved_model,
+                )
                 break
             except Exception as exc:
                 error_text = str(exc).lower()

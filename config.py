@@ -11,8 +11,10 @@ MODEL_IDS: list[str] = ["llama3.2", "claude-haiku-4-5", "gpt-4.1-mini"]
 
 MAX_TOKENS: int = 1024
 
-# Reasoning defaults (strict): these are always sent to providers that support
-# the corresponding parameters. If a provider/model rejects them, the run should
-# fail loudly instead of silently falling back.
-OPENAI_COMPAT_REASONING_EFFORT: str = "none"
-ANTHROPIC_THINKING: dict[str, str] = {"type": "disabled"}
+# Reasoning defaults. To switch back later:
+# - OpenAI-compatible: set OPENAI_COMPAT_REASONING_EFFORT to "none"
+# - Anthropic: set ANTHROPIC_REASONING_EFFORT to None and
+#   ANTHROPIC_THINKING to {"type": "disabled"}
+OPENAI_COMPAT_REASONING_EFFORT: str = "low"
+ANTHROPIC_REASONING_EFFORT: str | None = "low"
+ANTHROPIC_THINKING: dict[str, str] = {"type": "adaptive"}

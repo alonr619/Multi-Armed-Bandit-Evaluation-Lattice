@@ -3,12 +3,14 @@ import os
 import dotenv
 from typing import Any
 from agents.base import BaseLLM
-from config import MAX_TOKENS, ANTHROPIC_THINKING
+from agents.resilience import call_with_retry
+from config import MAX_TOKENS, ANTHROPIC_REASONING_EFFORT, ANTHROPIC_THINKING
 from agents.tools import ANTHROPIC_GOOD_TOOLS, ANTHROPIC_BAD_TOOLS
 
 dotenv.load_dotenv()
 
 class Anthropic(BaseLLM):
+    provider_name = "Anthropic"
     model_dict: dict[str, str] = {
         "claude-3-haiku-20240307": "claude-3-haiku-20240307",
         "claude-haiku-4-5": "claude-haiku-4-5-20251001",
@@ -19,6 +21,7 @@ class Anthropic(BaseLLM):
         "claude-opus-4-20250514": "claude-opus-4-20250514",
         "claude-opus-4-5": "claude-opus-4-5-20251101",
         "claude-opus-4-5-20251101": "claude-opus-4-5-20251101",
+        "claude-opus-4.6": "claude-opus-4-6",
         "claude-opus-4-6": "claude-opus-4-6",
         "claude-sonnet-4": "claude-sonnet-4-20250514",
         "claude-sonnet-4-20250514": "claude-sonnet-4-20250514",
@@ -29,6 +32,15 @@ class Anthropic(BaseLLM):
     client: anthropic.Anthropic | None = None
     good_tools: list[dict[str, Any]] = ANTHROPIC_GOOD_TOOLS
     bad_tools: list[dict[str, Any]] = ANTHROPIC_BAD_TOOLS
+    adaptive_thinking_models: set[str] = {
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+    }
+    effort_supported_models: set[str] = {
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-opus-4-5-20251101",
+    }
 
     @classmethod
     def get_client(cls) -> anthropic.Anthropic:
@@ -44,6 +56,7 @@ class Anthropic(BaseLLM):
 
     @classmethod
     def query(cls, conversation: list[dict], model: str, tools: list[dict[str, Any]]) -> dict[str, Any]:
+        resolved_model = cls.get_model_id(model)
         system_parts, payload = [], []
         for msg in conversation:
             if msg["role"] == "system":
@@ -70,12 +83,23 @@ class Anthropic(BaseLLM):
                 payload[-2] = second_to_last
 
         kwargs = {
-            "model": cls.get_model_id(model),
+            "model": resolved_model,
             "max_tokens": MAX_TOKENS,
             "messages": payload,
             "tools": tools,
-            "thinking": dict(ANTHROPIC_THINKING),
         }
+        thinking_type = ANTHROPIC_THINKING.get("type")
+        if (
+            thinking_type
+            and thinking_type != "disabled"
+            and resolved_model in cls.adaptive_thinking_models
+        ):
+            kwargs["thinking"] = dict(ANTHROPIC_THINKING)
+        if (
+            ANTHROPIC_REASONING_EFFORT
+            and resolved_model in cls.effort_supported_models
+        ):
+            kwargs["output_config"] = {"effort": ANTHROPIC_REASONING_EFFORT}
         if system_parts:
             kwargs["system"] = [
                 {
@@ -85,7 +109,11 @@ class Anthropic(BaseLLM):
                 }
             ]
 
-        response = cls.get_client().messages.create(**kwargs)
+        response = call_with_retry(
+            lambda: cls.get_client().messages.create(**kwargs),
+            provider_name=cls.provider_name,
+            model=resolved_model,
+        )
 
         llm_response = ""
         tool_call = None
