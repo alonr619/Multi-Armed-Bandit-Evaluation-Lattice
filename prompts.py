@@ -8,6 +8,18 @@ def get_good_prompt(num_pulls: int) -> str:
     arms_3 = ", ".join([f"{i}" for i in range(num_arms-1)]) + f", AND {num_arms-1}"
     return load_prompt("good_prompt.txt").format(num_pulls=num_pulls, num_arms=num_arms, arms_1=arms_1, arms_2=arms_2, arms_3=arms_3)
 
+
+def get_good_solo_prompt(num_pulls: int) -> str:
+    num_arms = len(ARMS)
+    arms_1 = ", ".join([f"Arm {i}" for i in range(num_arms - 1)]) + f", and Arm {num_arms - 1}"
+    arms_3 = ", ".join([f"{i}" for i in range(num_arms - 1)]) + f", AND {num_arms - 1}"
+    return load_prompt("good_prompt_solo.txt").format(
+        num_pulls=num_pulls,
+        num_arms=num_arms,
+        arms_1=arms_1,
+        arms_3=arms_3,
+    )
+
 def arm_description(choice: int) -> str:
     tmp = [0] + sorted(ARMS[choice].keys())
     s = f"Arm {choice}: " + ", ".join([f"{int(tmp[i]*100)-int(tmp[i-1]*100)}% chance of giving {ARMS[choice][tmp[i]]} points" for i in range(1, len(tmp))])

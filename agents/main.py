@@ -22,6 +22,7 @@ def _good_turn_text(
     num_pulls: int,
     latest_result: tuple[int, float] | None,
     bad_msg: str | None,
+    include_bad_msg: bool = True,
 ) -> str:
     """Format a round update for the good agent with a stable schema."""
     if latest_result is None:
@@ -36,8 +37,9 @@ def _good_turn_text(
         f"Turn {turn_index} of {num_pulls}",
         f"Latest observed arm choice: {arm_text}",
         f"Latest observed pull result: {result_text}",
-        f"Latest message from the other agent: {bad_msg if bad_msg else '(none)'}",
     ]
+    if include_bad_msg:
+        lines.append(f"Latest message from the other agent: {bad_msg if bad_msg else '(none)'}")
     return "\n".join(lines)
 
 
@@ -93,6 +95,8 @@ def call_good_agent(
     bad_messages: list[str],
     good_history_turns: list[dict],
     num_pulls: int,
+    prompt_override: str | None = None,
+    include_bad_message: bool = True,
 ) -> dict[str, Any]:
     """
     Call the good agent to make a decision.
@@ -104,12 +108,14 @@ def call_good_agent(
         bad_messages: List of messages from the bad agent.
         good_history_turns: Provider-native history turns for cache-friendly replay.
         num_pulls: Total number of pulls in the game.
+        prompt_override: Optional system prompt override for specialized modes.
+        include_bad_message: Whether to include bad-agent message text in turn-state.
 
     Returns:
         {"llm_response": str, "arm_pulled": int or None, "history_turn": dict}
     """
     client = _get_client(model)
-    prompt = get_good_prompt(num_pulls)
+    prompt = prompt_override if prompt_override is not None else get_good_prompt(num_pulls)
 
     # Build user context from explicit turn index, not from whether a pull
     # happened. This prevents repeated "first-round" framing if the model does
@@ -119,6 +125,7 @@ def call_good_agent(
         num_pulls=num_pulls,
         latest_result=past_results[-1] if past_results else None,
         bad_msg=bad_messages[-1] if bad_messages else None,
+        include_bad_msg=include_bad_message,
     )
 
     conversation = [
