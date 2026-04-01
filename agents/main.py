@@ -1,3 +1,4 @@
+import contextlib
 from agents.anthropic import Anthropic
 from agents.ollama import Ollama
 from agents.openai import OpenAI
@@ -15,6 +16,24 @@ def _get_client(model: str) -> BaseLLM:
         if client.contains_model(model):
             return client
     raise ValueError(f"Model {model} not found")
+
+
+def _get_reasoning_effort_override(client: BaseLLM, model: str) -> str | None:
+    resolver = getattr(client, "get_reasoning_effort_for_alias", None)
+    if callable(resolver):
+        effort = resolver(model)
+        return effort if isinstance(effort, str) else None
+    return None
+
+
+@contextlib.contextmanager
+def _reasoning_override_scope(client: BaseLLM, reasoning_effort: str | None):
+    scope_factory = getattr(client, "reasoning_effort_scope", None)
+    if reasoning_effort is None or not callable(scope_factory):
+        yield
+        return
+    with scope_factory(reasoning_effort):
+        yield
 
 
 def _good_turn_text(
@@ -134,7 +153,9 @@ def call_good_agent(
         {"role": "user", "content": current_user_text},
     ]
 
-    result = client.query(conversation, model, client.get_tools(True))
+    reasoning_effort_override = _get_reasoning_effort_override(client, model)
+    with _reasoning_override_scope(client, reasoning_effort_override):
+        result = client.query(conversation, model, client.get_tools(True))
 
     arm_pulled = None
     if result["tool_call"] and result["tool_call"]["name"] == "pull":
@@ -195,7 +216,9 @@ def call_bad_agent(
         {"role": "user", "content": current_user_text},
     ]
 
-    result = client.query(conversation, model, client.get_tools(False))
+    reasoning_effort_override = _get_reasoning_effort_override(client, model)
+    with _reasoning_override_scope(client, reasoning_effort_override):
+        result = client.query(conversation, model, client.get_tools(False))
 
     message = None
     if result["tool_call"] and result["tool_call"]["name"] == "send_message":

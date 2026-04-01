@@ -78,5 +78,17 @@ class OpenAI(OpenAICompatible):
             "o4-mini-2025-04-16",
         ]
     }
+    reasoning_effort_alias_map: dict[str, str] = {
+        "gpt-5.4-reasoning-none": "none",
+        "gpt-5.4-reasoning-low": "low",
+        "gpt-5.4-reasoning-medium": "medium",
+        "gpt-5.4-reasoning-high": "high",
+    }
+    model_dict.update({alias: "gpt-5.4" for alias in reasoning_effort_alias_map})
+
+    @classmethod
+    def get_reasoning_effort_for_alias(cls, model: str) -> str | None:
+        return cls.reasoning_effort_alias_map.get(model)
+
     good_tools = OPENAI_GOOD_TOOLS
     bad_tools = OPENAI_BAD_TOOLS

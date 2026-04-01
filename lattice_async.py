@@ -41,6 +41,7 @@ class LatticeSpec:
     name: str
     models: tuple[str, ...]
     reasoning: ReasoningProfile
+    pairs: tuple[tuple[str, str], ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,30 @@ LATTICES: dict[str, LatticeSpec] = {
             gemini_effort="low",
         ),
     ),
+    "gpt-5.4-reasoning-cross": LatticeSpec(
+        name="gpt-5.4-reasoning-cross",
+        models=(
+            "gpt-5.4-reasoning-none",
+            "gpt-5.4-reasoning-low",
+            "gpt-5.4-reasoning-medium",
+            "gpt-5.4-reasoning-high",
+        ),
+        reasoning=ReasoningProfile(
+            openai_effort="none",
+            anthropic_effort=None,
+            anthropic_thinking_type="disabled",
+            gemini_effort="none",
+        ),
+        pairs=(
+            ("gpt-5.4-reasoning-none", "gpt-5.4-reasoning-none"),
+            ("gpt-5.4-reasoning-low", "gpt-5.4-reasoning-none"),
+            ("gpt-5.4-reasoning-medium", "gpt-5.4-reasoning-none"),
+            ("gpt-5.4-reasoning-high", "gpt-5.4-reasoning-none"),
+            ("gpt-5.4-reasoning-none", "gpt-5.4-reasoning-low"),
+            ("gpt-5.4-reasoning-none", "gpt-5.4-reasoning-medium"),
+            ("gpt-5.4-reasoning-none", "gpt-5.4-reasoning-high"),
+        ),
+    ),
 }
 
 
@@ -111,8 +136,12 @@ def _build_matrix_rows(
 ) -> list[list[object]]:
     rows = [[f"{title} (Good \\ Evil)"] + [f"Evil: {model}" for model in models]]
     for good_model in models:
+        row_values: list[object] = []
+        for bad_model in models:
+            value = values.get((good_model, bad_model))
+            row_values.append("" if value is None else value)
         rows.append(
-            [f"Good: {good_model}"] + [values[(good_model, bad_model)] for bad_model in models]
+            [f"Good: {good_model}"] + row_values
         )
     return rows
 
@@ -125,12 +154,20 @@ def _apply_reasoning_profile(profile: ReasoningProfile) -> None:
     anthropic_module.ANTHROPIC_THINKING = {"type": profile.anthropic_thinking_type}
 
 
-def _build_match_tasks(models: tuple[str, ...], repeats: int) -> list[MatchTask]:
+def _build_match_tasks(lattice: LatticeSpec, repeats: int) -> list[MatchTask]:
+    if lattice.pairs is not None:
+        model_pairs = lattice.pairs
+    else:
+        model_pairs = tuple(
+            (good_model, bad_model)
+            for good_model in lattice.models
+            for bad_model in lattice.models
+        )
+
     return [
         MatchTask(good_model=good_model, bad_model=bad_model, repeat_index=repeat_idx)
         for repeat_idx in range(1, repeats + 1)
-        for good_model in models
-        for bad_model in models
+        for good_model, bad_model in model_pairs
     ]
 
 
@@ -266,6 +303,8 @@ def _print_run_header(
     print(f"  anthropic_effort={lattice.reasoning.anthropic_effort}")
     print(f"  anthropic_thinking_type={lattice.reasoning.anthropic_thinking_type}")
     print(f"  gemini_effort={lattice.reasoning.gemini_effort}")
+    if lattice.pairs is not None:
+        print(f"  custom_pairs={len(lattice.pairs)}")
 
     if not settings_report.exists:
         print(f"[settings] no settings file at {settings_report.path}; using environment/default values.")
@@ -346,7 +385,7 @@ async def _run_lattice(
     debug: bool,
 ) -> None:
     _apply_reasoning_profile(lattice.reasoning)
-    tasks = _build_match_tasks(lattice.models, repeats)
+    tasks = _build_match_tasks(lattice, repeats)
     lattice_dir = output_root / lattice.name
     matches_dir = lattice_dir / "matches"
     match_logs_dir = lattice_dir / "match_logs"
@@ -451,16 +490,10 @@ async def _run_lattice(
             )
         _write_csv(lattice_dir / "failures.csv", failure_rows)
 
-    actual_mean = {(g, b): _mean(actual_values[(g, b)]) for g in lattice.models for b in lattice.models}
-    expected_mean = {
-        (g, b): _mean(expected_values[(g, b)]) for g in lattice.models for b in lattice.models
-    }
-    actual_stdev = {
-        (g, b): _stdev(actual_values[(g, b)]) for g in lattice.models for b in lattice.models
-    }
-    expected_stdev = {
-        (g, b): _stdev(expected_values[(g, b)]) for g in lattice.models for b in lattice.models
-    }
+    actual_mean = {pair: _mean(values) for pair, values in actual_values.items()}
+    expected_mean = {pair: _mean(values) for pair, values in expected_values.items()}
+    actual_stdev = {pair: _stdev(values) for pair, values in actual_values.items()}
+    expected_stdev = {pair: _stdev(values) for pair, values in expected_values.items()}
 
     _write_csv(
         lattice_dir / "actual_scores_mean.csv",
@@ -496,7 +529,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--lattice",
         type=str,
-        choices=["openai-none", "mixed-low", "both"],
+        choices=["openai-none", "mixed-low", "gpt-5.4-reasoning-cross", "both"],
         default="both",
         help="Which preset lattice to run.",
     )

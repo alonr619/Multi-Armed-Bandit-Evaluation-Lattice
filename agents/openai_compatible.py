@@ -2,6 +2,8 @@ import json
 import os
 import re
 import ast
+import contextlib
+import contextvars
 from typing import Any
 
 import dotenv
@@ -28,6 +30,10 @@ class OpenAICompatible(BaseLLM):
     client: OpenAIClient | None = None
     unsupported_reasoning_effort_models: set[str] = set()
     resolved_token_limit_param: str | None = None
+    reasoning_effort_context: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+        "openai_compatible_reasoning_effort",
+        default=None,
+    )
 
     @classmethod
     def get_client(cls) -> OpenAIClient:
@@ -357,13 +363,26 @@ class OpenAICompatible(BaseLLM):
         }, cache_discount_available, cache_discount_note
 
     @classmethod
+    @contextlib.contextmanager
+    def reasoning_effort_scope(cls, reasoning_effort: str | None):
+        token = cls.reasoning_effort_context.set(reasoning_effort)
+        try:
+            yield
+        finally:
+            cls.reasoning_effort_context.reset(token)
+
+    @classmethod
     def query(
         cls, conversation: list[dict], model: str, tools: list[dict[str, Any]]
     ) -> dict[str, Any]:
         messages = cls._normalize_conversation(conversation)
         resolved_model = cls.get_model_id(model)
-        reasoning_effort = cls.reasoning_effort_override or OPENAI_COMPAT_REASONING_EFFORT
-        normalized_reasoning_effort = reasoning_effort.strip().lower()
+        reasoning_effort = (
+            cls.reasoning_effort_context.get()
+            or cls.reasoning_effort_override
+            or OPENAI_COMPAT_REASONING_EFFORT
+        )
+        normalized_reasoning_effort = reasoning_effort.strip().lower() if reasoning_effort else ""
         reasoning_effort_key = f"{cls.__name__}:{resolved_model}"
         token_limit_param = cls.resolved_token_limit_param or cls.token_limit_param
         kwargs: dict[str, Any] = {
